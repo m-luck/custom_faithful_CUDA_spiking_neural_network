@@ -3,12 +3,9 @@
 //GPU Architecture and Programming - Fall 2018
 
 #include <stdio.h> //Standard input-output
-#include <stlib.h> //StandardLibraryfunctions
-#include <iostream.h> //For streaming input-output operations
+#include <stdlib.h> //StandardLibraryfunctions
+#include <iostream> //For streaming input-output operations
 #include <math.h> //math
-
-//Unsigned integers for always positive numbers
-#typedef unsigned int uint
 
 //Define parameters of the network:
 const uint excitatory=256;//Excitatory neurons(N_e)
@@ -38,39 +35,44 @@ float LTdep[total];//Longterm depression
 uint ps_set[total][syn_per];//Matrix holding the post-synaptic neurons(syn_per) of each neuron(total)
 float weights[total][syn_per];//Matrix holding the weights of each synapse
 float w_derivs[total][syn_per];//Matrix holding the derivative of each above weight
-short delay_length[total][delay];//Matrix holding the delay values of each neuron
-short delays[total][delay][syn_per];//Matrix holding the delays to each synapse from each neuron
+uint delay_length[total][delay];//Matrix holding the delay values of each neuron
+uint delays[total][delay][syn_per];//Matrix holding the delays to each synapse from each neuron
 uint pre_neuron[total];//Index of presynaptic information
 uint pre_i[total][syn_per*3];//Presynaptic inputs
 uint pre_delay[total][syn_per*3];//Presynaptic delays
 float *pre_weights[total][syn_per*3];//Presynaptic weights
 float *pre_w_derivs[total][syn_per*3];//Presynaptic derivatives
 
-voidinitialize()
+
+int pstochastic(uint n) { // Pseudo-stochastic/random
+  return rand() % (int)(n);
+}
+
+void initialize()
 {
 uint i,j,k;
 uint j_j;
 uint d_d;
-uint init;
+uint self;
 uint r;
 
-for(i=0;i<excitatory;i++)a[i]=0.02//Set excitatory as regular-spiking neurons
+for(i=0;i<excitatory;i++)a[i]=0.02;//Set excitatory as regular-spiking neurons
 
-for(i=excitatory;i<N;i++)a[i]=0.1;//Set inhibitory as fast-spiking neurons
+for(i=excitatory;i<total;i++)a[i]=0.1;//Set inhibitory as fast-spiking neurons
 
-for(i=0;i<excitatory;i++)d[i]=8.0//Set excitatory as regular-spiking neurons
+for(i=0;i<excitatory;i++)d[i]=8.0;//Set excitatory as regular-spiking neurons
 
-for(i=excitatory;i<N;i++)d[i]=2.0;//Set inhibitory as fast-spiking neurons
+for(i=excitatory;i<total;i++)d[i]=2.0;//Set inhibitory as fast-spiking neurons
 
 //Self-sort synapses:
-for(i=0;i<N;i++)//Every neuron
+for(i=0;i<total;i++)//Every neuron
 for(j=0;j<syn_per;j++)//Every weight of connected synapse
   {
   do{
-  init=0;
+  self=0;
 
   if(i<excitatory)r=pstochastic(total);//Pick a random neuron
-  elser=pstochastic(excitatory);//Pick a random excitatory neurons
+  else r=pstochastic(excitatory);//Pick a random excitatory neurons
 
   if(r==i)self=1;//Self selection
 
@@ -82,7 +84,7 @@ for(j=0;j<syn_per;j++)//Every weight of connected synapse
   }
   while(self==1);
 
-ps_set[i][j]=r//This synapse is randomly assigned
+  ps_set[i][j]=r;//This synapse is randomly assigned
 }
 
 //Initialize excitatory synaptic weights
@@ -100,14 +102,14 @@ for(i=0;i<total;i++)
 for(j=0;j<syn_per;j++)
 w_derivs[i][j]=0.0;
 
-for(i=0;i<N;i++)//For every neuron
+for(i=0;i<total;i++)//For every neuron
   {
-  shortind=0;//Keep track of its index
+  short ind=0;//Keep track of its index
 
   if(i<excitatory)//If the neuron is excitatory
     {
     //Update delay lengths
-    for(j=0;j<delays;j++)
+    for(j=0;j<delay;j++)
     {
     delay_length[i][j]=syn_per/delay;//Allocate equal intervals
       //Update delays via delay lengths
@@ -119,7 +121,7 @@ for(i=0;i<N;i++)//For every neuron
   else
     {
     //Set all delays to 1ms from delay start
-    for(j=0;j<delays;j++)
+    for(j=0;j<delay;j++)
     delay_length[i][j]=0;
 
     delay_length[i][0]=syn_per;
@@ -131,7 +133,7 @@ for(i=0;i<N;i++)//For every neuron
     }
 }
 
-for(i=0;i<N;i++)
+for(i=0;i<total;i++)
   {
   pre_neuron[i]=0;
   for(j=0;j<excitatory;j++)
@@ -142,9 +144,9 @@ for(i=0;i<N;i++)
 
       for(d_d=0;d_d<delay;d_d++)//Every delay
       for(j_j=0;j_j<delay_length[j][d_d];j_j++)
-      if(ps_set[j][delay_length[j][d_d][j_j]]==i)
-        pre_delay[i][pre_neuron[i]]=d_d
-      pre_weights[i][pre_neuron[i]]=&weight[j][k];//Presynaptic weight assigned to relevant synaptic weights
+      if(ps_set[j][ delays[j][d_d][j_j] ]==i)
+        pre_delay[i][pre_neuron[i]]=d_d;
+      pre_weights[i][pre_neuron[i]]=&weights[j][k];//Presynaptic weight assigned to relevant synaptic weights
       pre_w_derivs[i][pre_neuron[i]++]=&w_derivs[j][k];//Likewise with derivatives
       }
   }
@@ -161,16 +163,16 @@ for(i=0;i<total;i++)	v[i]=-65.0;//Initialize v (resting membrane potential)
 for(i=0;i<total;i++)	u[i]=0.2*v[i];//initial values for u
 
 num_fired=1;//spike timings
-fired[0][0]=-D;//dummy spike with negative delay interval for warmup
-fired[0][1]=0;//dummy spike
+spike_times[0][0]=-delay;//dummy spike with negative delay interval for warmup
+spike_times[0][1]=0;//dummy spike
 
 }
 
-void main()
+int main()
 {
 
-uinti,j,k;//Loop counters
-uintsec,t;//seconds, milliseconds
+uint i,j,k;//Loop counters
+uint sec,t;//seconds, milliseconds
 float	inputs[total];//Inputs to neurons!
 FILE	*fs;//File pointer
 
@@ -187,43 +189,43 @@ for(t=0;t<1000;t++)//plot for 1sec(1000ms)
       {
       v[i]=-65.0;//Zero the voltage
       u[i]+=d[i];//Refractory period
-      LTpot[i][t+D]=0.1;// Update potentiation
+      LTpot[i][t+delay]=0.1;// Update potentiation
       LTdep[i]=0.12;//Update depression
 
       for(j=0;j<pre_neuron[i];j++)
         *pre_w_derivs[i][j]+=LTpot[pre_i[i][j]][t+delay-pre_delay[i][j]-1];//Spike after presynaptic spike
-      fired[num_fired][0]=t;
-      fired[num_fired++][1]=i;
-      if(num_fired==hz){ cout<<"Too many spikes at t="<<t<<"(ignoring all)"; num_fired=1; }
+      spike_times[num_fired][0]=t;
+      spike_times[num_fired++][1]=i;
+      if(num_fired==hz){ std::cout<<"Too many spikes at t="<<t<<"(ignoring all)"; num_fired=1; }
       }
 
   k=num_fired;
-  while(t-fired[--k][0]<delay)
+  while(t-spike_times[--k][0]<delay)
     {
-    for(j=0;j<delay_length[fired[k][1]][t-fired[k][0]];j++)
+    for(j=0;j<delay_length[spike_times[k][1]][t-spike_times[k][0]];j++)
       {
-      i=post[fired[k][1]][delays[fired[k][1]][t-fired[k][0]][j]];
-      inputs[i]+=s[fired[k][1]][delays[fired[k][1]][t-fired[k][0]][j]];
-      if(fired[k][1]<excitatory)//Spike before post-synaptic
-      	w_derivs[fired[k][1]][delays[fired[k][1]][t-fired[k][0]][j]]-=LTdep[i];
+      i=ps_set[spike_times[k][1]][delays[spike_times[k][1]][t-spike_times[k][0]][j]];
+      inputs[i]+= weights[ spike_times[k][1] ] [ delays[ spike_times[k][1] ] [ t-spike_times[k][0] ] [j] ];
+      if(spike_times[k][1]<excitatory)//Spike before post-synaptic
+      	w_derivs[spike_times[k][1]][delays[spike_times[k][1]][t-spike_times[k][0]][j]]-=LTdep[i];
       }
     }
 
-  for(i=0;i<N;i++)
+  for(i=0;i<total;i++)
     {
-    v[i]+=0.5*((0.04*v[i]+5)*v[i]+140-u[i]+I[i]);//Izkevich formulae
-    v[i]+=0.5*((0.04*v[i]+5)*v[i]+140-u[i]+I[i]);//Repeat
+    v[i]+=0.5*((0.04*v[i]+5)*v[i]+140-u[i]+inputs[i]);//Izkevich formulae
+    v[i]+=0.5*((0.04*v[i]+5)*v[i]+140-u[i]+inputs[i]);//Repeat
     u[i]+=a[i]*(0.2*v[i]-u[i]);
-    LTpot[i][t+D+1]=0.95*LTpot[i][t+D];
+    LTpot[i][t+delay+1]=0.95*LTpot[i][t+delay];
     LTdep[i]*=0.95;
     }
   }
 
-cout<<"sec="<<sec<<",firingrate="<<float(num_fired)/N<<"\n";
+std::cout<<"sec="<<sec<<",firingrate="<<float(num_fired)/total<<"\n";
 fs=fopen("spikes.dat","w");
 for(i=1;i<num_fired;i++)
-if(fired[i][0]>=0)
-  fprintf(fs,"%d%d\n",fired[i][0],fired[i][1]);
+if(spike_times[i][0]>=0)
+  fprintf(fs,"%d%d\n",spike_times[i][0],spike_times[i][1]);
 fclose(fs);
 
 //Next second
@@ -232,20 +234,23 @@ for(j=0;j<delay+1;j++)
   LTpot[i][j]=LTpot[i][1000+j];
 
 k=num_fired-1;
-while(1000-fired[k][0]<delay)k--;
-  for(i=1;i<num_fired-k;i++)
+while(1000-spike_times[k][0]<delay)k--;
+
+for(i=1;i<num_fired-k;i++)
   {
-  fired[i][0]=fired[k+i][0]-1000;
-  fired[i][1]=fired[k+i][1];
+  spike_times[i][0]=spike_times[k+i][0]-1000;
+  spike_times[i][1]=spike_times[k+i][1];
   }
 num_fired=num_fired-k;
 
-for(i=0;i<Ne;i++)	//Update excitatory connections
-for(j=0;j<M;j++)
+for(i=0;i<excitatory;i++)	//Update excitatory connections
+for(j=0;j<syn_per;j++)
   {
-  s[i][j]+=0.01+sd[i][j];
-  sd[i][j]*=0.9;
-  if(s[i][j]>sm)s[i][j]=sm;
-  if(s[i][j]<0)s[i][j]=0.0;
+  weights[i][j]+=0.01+w_derivs[i][j];
+  w_derivs[i][j]*=0.9;
+  if(weights[i][j]>synweight) weights[i][j]=synweight;
+  if(weights[i][j]<0) weights[i][j]=0.0;
   }
+
+return 1;
 }
