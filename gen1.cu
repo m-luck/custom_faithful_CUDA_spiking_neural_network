@@ -73,6 +73,12 @@ void initialize()
         do {
           init = 0;
           if ( i < excitatory ) r = pstochastic(total)
+          {
+            for ( j = 0 ; j < delay; j++)
+            {
+              
+            }
+          }
         }
       }
 
