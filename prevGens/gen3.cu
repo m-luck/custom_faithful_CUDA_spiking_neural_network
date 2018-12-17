@@ -163,9 +163,10 @@ int main()
 		}
 		std::cout << "sec=" << sec << ", firing rate=" << float(num_fired)/total << "\n";
    		fs = fopen("spikes.dat","w+");
+      printf("%d", num_fired);
 		for (i=1;i<num_fired;i++)
 			if (spike[i][0] >=0)
-				fprintf(fs, "%d  %d\n", spike[i][0], spike[i][1]);
+				fprintf(fs, "%d  %d\nfffff", spike[i][0], spike[i][1]);
 		fclose(fs);
 
 		for (i=0;i<total;i++)		// prepare for the next sec
