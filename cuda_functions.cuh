@@ -1,0 +1,2 @@
+
+void self_initialization();
