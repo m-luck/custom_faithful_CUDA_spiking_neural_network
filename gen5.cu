@@ -49,11 +49,11 @@ int pstochastic(int n) { // Pseudo-stochastic/random
 
 void initialize()
 {
-uint i,j,k;
-uint jj;
-uint dd;
-uint self;
-uint r;
+int i,j,k;
+int jj;
+int dd;
+int self;
+int r;
 
 for(i=0;i<excitatory;i++)a[i]=0.02;//Set excitatory as regular-spiking neurons
 
@@ -169,8 +169,8 @@ spike[0][1]=0;//dummy spike
 int main()
 {
 
-uint i,j,k;//Loop counters
-uint sec,t;//seconds, milliseconds
+int i,j,k;//Loop counters
+int sec,t;//seconds, milliseconds
 float	inputs[total];//Inputs to neurons!
 FILE	*fs;//File pointer
 
