@@ -1,7 +1,9 @@
 //Editor: Michael Lukiman
-//Izhikevich spiking neuron network implementation in CUDA with added spatial winner-take-all dynamics
+//Spiking neuron network region implementation in CUDA with additional spatial winner-take-all dynamics
 //GPU Architecture and Programming - Fall 2018
 
+
+// As this is a faithful representation of neuronal spiking in a 'region' of the brain, we will do out best to cut down library use and use transparent operations:
 #include <stdio.h> //Standard input-output
 #include <stdlib.h> //StandardLibraryfunctions
 #include <iostream> //For streaming input-output operations
@@ -17,7 +19,7 @@ __global__ excitatoryAsRegularSpiking(float * dev_a, float * dev_d) {
     }
 }
 
-__global__ inhibitoryAsFastSpiking(float * dev_a) {
+__global__ inhibitoryAsFastSpiking(float * dev_a, float * dev_d) {
   int tid = threadIdx.x + ( blockIdx.x + blockDim.x);
   if (tid < total - excitatory) 
     {
@@ -50,22 +52,31 @@ __global__ synapticDerivatives(float * devs_w_derivs, int synapses) {
       w_derivs[i][j]=0.0;
 }
 
-__global__ initLT(float * dev_LTP, float * dev_LTD) {
-  int tid = threadIdx.x + ( blockIdx.x + blockDim.x) {
-    for(i=0;i<total;i++)
-for(j=0;j<1+delay;j++)
-LTpot[i][j]=0.0;
+__global__ initLT(float * dev_LTP, float * dev_LTD, int delay) {
+  int tid = threadIdx.x + ( blockIdx.x + blockDim.x);
+  if (tid < total)
+    for(j=0;j<1+delay;j++)
+      dev_LTP[tid][j]=0.0;
+      dev_LTD[tid]=0.0;
+}
 
-for(i=0;i<total;i++)  LTdep[i]=0.0;//Initialize longterm depression values
 
-for(i=0;i<total;i++)  v[i]=-65.0;//Initialize v (resting membrane potential)
-
-for(i=0;i<total;i++)  u[i]=0.2*v[i];//initial values for u
+__global__ initvu(float * dev_v, float * dev_u) {
+  int tid = threadIdx.x + ( blockIdx.x + blockDim.x);
+  if (tid < total)
+    dev_v[tid]=-65.0;//Initialize v (resting membrane potential)
+    dev_u[tid]=0.2*dev_v[tid];//initial values for u
 
 
 __global__ warmup() {
   printf("Thank you.")
 }
+
+cudaStream_t stream1, stream2, stream3, stream4;
+cudaStreamCreate(&stream1);
+cudaStreamCreate(&stream2);
+cudaStreamCreate(&stream3);
+cudaStreamCreate(&stream4);
 
 //Define parameters of the network:
 const int excitatory=800;//Excitatory neurons(N_e)
@@ -130,10 +141,10 @@ int pstochastic(int n) { // Pseudo-stochastic/random
 void initialize()
 {
 uint i,j,k;
+uint ii;
 uint jj;
-uint dd;
 uint self;
-uint r;
+uint rselect;
 
 warmup<<<1,1>>>
 cudaMalloc(&dev_a, sizeof(float)*total);
@@ -160,23 +171,29 @@ for(j=0;j<synapses;j++)//Every connected synapses.
 
   //Not a recurrent network, so also prevent synapses connecting to self
   for(k=0;k<j;k++)
-  if(ps_set[i][k]==r)//If the synapse connects to self
+  if(ps_set[i][k]==rselect)//If the synapse connects to self
   self=1;
 
   }
   while(self==1);
 
-  ps_set[i][j]=r;//This synapse is randomly assigned
+  ps_set[i][j]=rselect;//This synapse included in the synapse set
 }
 
 cudaMalloc(&dev_weights, sizeof(float)*total*synapses);
-cudaMemcpy(dev_weights, weights, sizeof(float)*total*synapses, cudaMemcpyHostToDevice);
-excitatorySynapticWeights<<<excBlocks128,threadsPerBlock,0>>>(dev_weights);//CUDA Stream 1 - Initialize excitatory synaptic weights
-inhibitorySynapticWeights<<<inhBlocks128,threadsPerBlock,1>>>(dev_weights);//CUDA Stream 2 - Initialize inhibitory weights
 cudaMalloc(&dev_w_derivs, sizeof(float)*total*synapses);
-cudaMemcpy(dev_w_derivs, weights, sizeof(float)*total*synapses, cudaMemcpyHostToDevice);
-synapticDerivatives<<<totBlocks128, threadsPerBlock,2>>>(dev_w_derivs)//CUDA Stream 3 - Initialize synaptic derivatives
+cudaMemcpy(dev_weights, weights, sizeof(float)*total*synapses, cudaMemcpyHostToDevice);
+cudaDeviceSynchronize(); // Make sure those of non-zero stream do not launch before this is done. 
+cudaMemcpyAsync(dev_w_derivs, w_derivs, sizeof(float)*total*synapses, cudaMemcpyHostToDevice, stream3); // This will potentially overlap the derivatives transfer with the two following kernels, and is the same stream as the third kernel that eventually needs it. 
+excitatorySynapticWeights<<<excBlocks128,threadsPerBlock,stream1>>>(dev_weights, synapses);//CUDA Stream 1 - Initialize excitatory synaptic weights
+inhibitorySynapticWeights<<<inhBlocks128,threadsPerBlock,stream2>>>(dev_weights, synapses);//CUDA Stream 2 - Initialize inhibitory weights
+synapticDerivatives<<<totBlocks128, threadsPerBlock,stream3>>>(dev_w_derivs, synapses)//CUDA Stream 3 - Initialize synaptic derivatives
 // Using streams to hide memory transfer latency to some degree. 
+cudaStreamSynchronize(stream1);
+cudaStreamSynchronize(stream2);
+cudaMemcpyAsync(weights, dev_weights, sizeof(float)*total*synapses, cudaMemcpyDeviceToHost, stream1); 
+cudaMemcpyAsync(w_derivs, dev_w_derivs, sizeof(float)*total*synapses, cudaMemcpyDeviceToHost, stream3); // Since this is in stream 3, it will implicitly wait for the derivative operation (also in stream 3) to complete. 
+cudaDeviceSynchronize(); // Explicit synchronization for non-zero streams. Host code to follow:
 
 for(i=0;i<total;i++)//For every neuron
   {
@@ -190,7 +207,7 @@ for(i=0;i<total;i++)//For every neuron
     del_length[i][j]=synapses/delay;//Allocate equal intervals
       //Update del_set via delay lengths
       for(k=0;k<del_length[i][j];k++)
-      del_set[i][j][k]=ind++;//CUDA note: since this manually adjusts an index, we are wary to parallelize loops around here.
+      del_set[i][j][k]=ind++;//CUDA note: since this manually adjusts an index, we are wary to parallelize loops around between this and ind=0.
     }
     }
 
@@ -203,7 +220,7 @@ for(i=0;i<total;i++)//For every neuron
     del_length[i][0]=synapses;
 
     for(k=0;k<del_length[i][0];k++)
-    del_set[i][0][k]=ind++;//CUDA note: here as well, wary to parallelize.
+    del_set[i][0][k]=ind++;//CUDA note: here as well.
 
     }
 }
@@ -217,18 +234,19 @@ for(i=0;i<total;i++)
       {
       pre_input[i][pre_neuron[i]]=j;//Register it to the set
 
-      for(dd=0;dd<delay;dd++)//Every delay
-      for(jj=0;jj<del_length[j][dd];jj++)
-      if(ps_set[j][ del_set[j][dd][jj] ]==i)
-        pre_delay[i][pre_neuron[i]]=dd;
+      for(jj=0;jj<delay;jj++)//Every delay
+      for(ii=0;ii<del_length[j][jj];ii++)
+      if(ps_set[j][ del_set[j][jj][ii] ]==i)
+        pre_delay[i][pre_neuron[i]]=jj;
       pre_weights[i][pre_neuron[i]]=&weights[j][k];//Presynaptic weight assigned to relevant synaptic weights
       pre_w_derivs[i][pre_neuron[i]++]=&w_derivs[j][k];//Likewise with derivatives
-      } // I had originally attempted to parallelize this, but the transfer of all matrices proves to be too costly.
+      } // I had originally attempted to parallelize this, but the transfer of all matrices proves to be too costly for their latency and memory access pattern.
   }
 
 //Initialize longterm values and membrane potentials
-initLT<<<totBlocks128, threadsPerBlock>>>(dev_LTP);//CUDA note: could very well be put in same kernel, but want to take advantage of parallel streams. 
-initvu<<<totBlocks128, threadsPerBlock>>>(dev_v, dev_u);//CUDA
+initLT<<<totBlocks128, threadsPerBlock, stream1>>>(dev_LTP, delay);//CUDA note: could very well be put in same kernel as operations below, but want to take advantage of parallel streams. 
+initvu<<<totBlocks128, threadsPerBlock, stream2>>>(dev_v, dev_u);//CUDA
+cudaDeviceSynchronize(); // Explicit non-default stream synchronize.
 
 num_fired=1;//spike timings
 spike[0][0]=-delay;//dummy spike with negative delay interval for warmup
