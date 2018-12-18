@@ -80,7 +80,7 @@ __global__ void updateVoltages(int i, int t, int total, int delay, float * v, fl
       u[tid]+=a[tid]*(0.2*v[tid]-u[tid]);
       LTpot[tid*(1001+delay)+t+delay+1]=0.95*LTpot[tid*(1001+delay)+t+delay];
       LTdep[tid]*=0.95;
-  }
+     }
 }
 
 __global__ void updatePotentiation(int total, int delay, float * LTpot)    {
@@ -90,12 +90,35 @@ __global__ void updatePotentiation(int total, int delay, float * LTpot)    {
         LTpot[tid*(1001+delay)+j]=LTpot[tid*(1001+delay)+1000+j];
 }
 
+__global__ void updateSpike(int num_fired, int k, int * spike)    {
+    int tid = threadIdx.x + ( blockIdx.x * blockDim.x);
+    if (tid<num_fired)
+      {
+      spike[tid*2+0]=spike[(k+tid)*2+0]-1000;
+      spike[tid*2+1]=spike[(k+tid)*2+1];
+      }
+}
+
+
+__global__ void updateExcitatory(int excitatory, int synapses, int total, int max_weight, float * weights, float * w_derivs) {
+
+    int tid = threadIdx.x + ( blockIdx.x * blockDim.x);
+    if (tid<excitatory)
+      for(int j=0;j<synapses;j++)
+        {
+        weights[tid*total+j]+=0.01+w_derivs[tid*total+j];
+        w_derivs[tid*total+j]*=0.9;
+        if(weights[tid*total+j]>max_weight) weights[tid*total+j]=max_weight;
+        if(weights[tid*total+j]<0) weights[tid*total+j]=0.0;
+        }
+}
+
 __global__ void warmup() {
-  printf("Thank you.");
+  printf("Thank you.\n");
 }
 
 //Define parameters of the network:
-const int excitatory=750;//Excitatory neurons(N_e)
+const int excitatory=1000;//Excitatory neurons(N_e)
 const int inhibitory=250;//Inhibitory neurons(N_i)
 const int total=excitatory+inhibitory;//Total Exc.+Inh. neurons
 const int synapses=100;//synapses per neuron
@@ -152,11 +175,22 @@ float *dev_inputs;
 int *dev_num_fired;
 int *dev_spike;
 
+// CUDA function buttons:
+  int toggleInitAs = 0;
+  int toggleInitSynaptic = 0;
+  int toggleInitLT = 0;
+  int toggleUpdateVoltages = 0;
+  int toggleUpdatePotentiation = 0;
+  int toggleUpdateSpike = 0;
+  int toggleUpdateExcitatory = 0;
+  int toggleWarmup = 0;
+
+
 int pstochastic(int n) { // Pseudo-stochastic/random
   return rand() % (int)(n);
 }
 
-void initialize()
+void initialize(int toggleInitAs, int toggleInitSynaptic, int toggleInitLT, int toggleWarmup)
 {
 
 cudaStream_t stream1, stream2, stream3, stream4;
@@ -170,12 +204,13 @@ int ii;
 int jj;
 int self;
 int rselect;
-
-warmup<<<1,1>>>();
+if (toggleWarmup==1) warmup<<<1,1>>>();
 cudaMalloc(&dev_a, sizeof(float)*total);
 // cudaMemcpy(dev_a, a, sizeof(float)*total, cudaMemcpyHostToDevice);
 cudaMalloc(&dev_d, sizeof(float)*total);
 // cudaMemcpy(dev_d, d, sizeof(float)*total, cudaMemcpyHostToDevice);
+
+if (toggleInitAs==1){
 cudaDeviceSynchronize();
 excitatoryAsRegularSpiking<<<excBlocks128, threadsPerBlock,0,stream1>>>(dev_a,dev_d,total,excitatory);//CUDA Stream 1 - Set excitatory as regular-spiking neurons
 inhibitoryAsFastSpiking<<<inhBlocks128, threadsPerBlock,0,stream2>>>(dev_a, dev_d,total,excitatory);//CUDA Stream 2 - Set inhibitory as fast-spiking neurons
@@ -183,16 +218,18 @@ cudaDeviceSynchronize();
 cudaMemcpy(a, dev_a, sizeof(float)*total, cudaMemcpyDeviceToHost);
 cudaMemcpy(d, dev_d, sizeof(float)*total, cudaMemcpyDeviceToHost);
 cudaDeviceSynchronize();
+}
 
-//
-// for(i=0;i<excitatory;i++)a[i]=0.02;//Set excitatory as regular-spiking neurons
-//
-// for(i=excitatory;i<total;i++)a[i]=0.1;//Set inhibitory as fast-spiking neurons
-//
-// for(i=0;i<excitatory;i++)d[i]=8.0;//Set excitatory as regular-spiking neurons
-//
-// for(i=excitatory;i<total;i++)d[i]=2.0;//Set inhibitory as fast-spiking neurons
+else {
 
+for(i=0;i<excitatory;i++)a[i]=0.02;//Set excitatory as regular-spiking neurons
+
+for(i=excitatory;i<total;i++)a[i]=0.1;//Set inhibitory as fast-spiking neurons
+
+for(i=0;i<excitatory;i++)d[i]=8.0;//Set excitatory as regular-spiking neurons
+
+for(i=excitatory;i<total;i++)d[i]=2.0;//Set inhibitory as fast-spiking neurons
+}
 
 //Self-sort synapses:
 for(i=0;i<total;i++)//Every neuron. -- CUDA note: would parallelize this, however it utilises a Host random function I edited (pstochastic()) - there are rand libraries for CUDA, but the overhead for cudarand is high.
@@ -222,6 +259,8 @@ for(j=0;j<synapses;j++)//Every connected synapses.
 
 cudaMalloc(&dev_weights, sizeof(float)*total*synapses);
 cudaMalloc(&dev_w_derivs, sizeof(float)*total*synapses);
+
+if (toggleInitSynaptic==1){
 // cudaMemcpy(dev_weights, weights, sizeof(float)*total*synapses, cudaMemcpyHostToDevice);
 cudaDeviceSynchronize(); // Make sure those of non-zero stream do not launch before this is done.
 // cudaMemcpyAsync(dev_w_derivs, w_derivs, sizeof(float)*total*synapses, cudaMemcpyHostToDevice, stream3); // This will potentially overlap the derivatives transfer with the two following kernels, and is the same stream as the third kernel that eventually needs it.
@@ -234,22 +273,24 @@ cudaStreamSynchronize(stream2);
 cudaMemcpy(weights, dev_weights, sizeof(float)*total*synapses, cudaMemcpyDeviceToHost);
 cudaMemcpy(w_derivs, dev_w_derivs, sizeof(float)*total*synapses, cudaMemcpyDeviceToHost); // Since this is in stream 3, it will implicitly wait for the derivative operation (also in stream 3) to complete.
 cudaDeviceSynchronize(); // Explicit synchronization for non-zero streams. Host code to follow:
+}
 
-//
-// //Initialize excitatory synaptic weights
-// for(i=0;i<excitatory;i++)
-// for(j=0;j<synapses;j++)
-// weights[i][j]=6.0;
-//
-// //Initialize inhibitory weights
-// for(i=excitatory;i<total;i++)
-// for(j=0;j<synapses;j++)
-// weights[i][j]=-5.0;
-//
-// //Initialize synaptic derivatives
-// for(i=0;i<total;i++)
-// for(j=0;j<synapses;j++)
-// w_derivs[i][j]=0.0;
+else {
+//Initialize excitatory synaptic weights
+for(i=0;i<excitatory;i++)
+for(j=0;j<synapses;j++)
+weights[i][j]=6.0;
+
+//Initialize inhibitory weights
+for(i=excitatory;i<total;i++)
+for(j=0;j<synapses;j++)
+weights[i][j]=-5.0;
+
+//Initialize synaptic derivatives
+for(i=0;i<total;i++)
+for(j=0;j<synapses;j++)
+w_derivs[i][j]=0.0;
+}
 
 for(i=0;i<total;i++)//For every neuron
   {
@@ -305,6 +346,7 @@ cudaMalloc(&dev_LTD, sizeof(float)*total);
 cudaMalloc(&dev_v, sizeof(float)*total);
 cudaMalloc(&dev_u, sizeof(float)*total);
 cudaDeviceSynchronize();
+if (toggleInitLT==1){
 initLT<<<totBlocks128, threadsPerBlock,0, stream1>>>(dev_LTP, dev_LTD, delay,total,excitatory);//CUDA note: could very well be put in same kernel as operations below, but want to take advantage of parallel streams.
 initvu<<<totBlocks128, threadsPerBlock,0, stream2>>>(dev_v, dev_u,total,excitatory);//CUDA
 cudaDeviceSynchronize(); // Explicit non-default stream synchronize.
@@ -313,18 +355,20 @@ cudaMemcpy(LTdep, dev_LTD, sizeof(float)*total, cudaMemcpyDeviceToHost);
 cudaMemcpy(v, dev_v, sizeof(float)*total, cudaMemcpyDeviceToHost);
 cudaMemcpy(u, dev_u, sizeof(float)*total, cudaMemcpyDeviceToHost);
 cudaDeviceSynchronize();
+}
 
-// //Initialize longterm potentiation values
-// for(i=0;i<total;i++)
-// for(j=0;j<1+delay;j++)
-// LTpot[i][j]=0.0;
-//
-// for(i=0;i<total;i++)	LTdep[i]=0.0;//Initialize longterm depression values
-//
-// for(i=0;i<total;i++)	v[i]=-65.0;//Initialize v (resting membrane potential)
-//
-// for(i=0;i<total;i++)	u[i]=0.2*v[i];//initial values for u
+else {
+//Initialize longterm potentiation values
+for(i=0;i<total;i++)
+for(j=0;j<1+delay;j++)
+LTpot[i][j]=0.0;
 
+for(i=0;i<total;i++)	LTdep[i]=0.0;//Initialize longterm depression values
+
+for(i=0;i<total;i++)	v[i]=-65.0;//Initialize v (resting membrane potential)
+
+for(i=0;i<total;i++)	u[i]=0.2*v[i];//initial values for u
+}
 
 num_fired=1;//spike timings
 spike[0][0]=-delay;//dummy spike with negative delay interval for warmup
@@ -332,10 +376,22 @@ spike[0][1]=0;//dummy spike
 
 }
 
-int main()
+int main(int argc, char *argv[])
 {
 
+// CUDA function buttons update:
+  int toggleInitAs = argc>1?(int)argv[1][0]-'0':0;
+  int toggleInitSynaptic = argc>2?(int)argv[2][0]-'0':0;
+  int toggleInitLT = argc>3?(int)argv[3][0]-'0':0;
+  int toggleUpdateVoltages = argc>4?(int)argv[4][0]-'0':0;
+  int toggleUpdatePotentiation = argc>5?(int)argv[5][0]-'0':0;
+  int toggleUpdateSpike = argc>6?(int)argv[6][0]-'0':0;
+  int toggleUpdateExcitatory = argc>7?(int)argv[7][0]-'0':0;
+  int toggleWarmup = argc>8?(int)argv[8][0]-'0':0;
+
+
 cudaMalloc(&dev_inputs, sizeof(float)*total);
+cudaMalloc(&dev_spike, sizeof(float)*hz*2);
 
 int i,j,k;//Loop counters
 int sec,t;//seconds, milliseconds
@@ -343,11 +399,11 @@ float	inputs[total];
 FILE	*fs;//File pointer to trace
 FILE	*fs2D;//File pointer to individual neuron tracing!
 
-initialize();
+initialize(toggleInitAs,toggleInitSynaptic,toggleInitLT,toggleWarmup);
 fs=fopen("trace.out","w");
 fs2D=fopen("slice_2D_trace.out","w");
 
-for(sec=0;sec<3;sec++) {//plot for 3s)
+for(sec=0;sec<10;sec++) {//plot for 3s)
 for(t=0;t<1000;t++)//plot for 1sec(1000ms)
   {
   for(i=0;i<total;i++)inputs[i]=0.0;//Fresh input
@@ -389,6 +445,7 @@ for(t=0;t<1000;t++)//plot for 1sec(1000ms)
 
   //Update voltages per Iz formula
 
+if (toggleUpdateVoltages == 1) {
   cudaMemcpy(dev_a, a, sizeof(float)*total, cudaMemcpyHostToDevice);
   cudaMemcpy(dev_u, u, sizeof(float)*total, cudaMemcpyHostToDevice);
   cudaMemcpy(dev_v, v, sizeof(float)*total, cudaMemcpyHostToDevice);
@@ -402,53 +459,86 @@ for(t=0;t<1000;t++)//plot for 1sec(1000ms)
   cudaMemcpy(v, dev_v, sizeof(float)*total, cudaMemcpyDeviceToHost);
   cudaMemcpy(u, dev_u, sizeof(float)*total, cudaMemcpyDeviceToHost);
   cudaMemcpy(a, dev_a, sizeof(float)*total, cudaMemcpyDeviceToHost);
-  //
-  // for(i=0;i<total;i++)
-  //   {
-  //   v[i]+=0.5*((0.04*v[i]+5)*v[i]+140-u[i]+inputs[i]);//Izkevich formulae
-  //   v[i]+=0.5*((0.04*v[i]+5)*v[i]+140-u[i]+inputs[i]);//Repeat
-  //   u[i]+=a[i]*(0.2*v[i]-u[i]);
-  //   LTpot[i][t+delay+1]=0.95*LTpot[i][t+delay];
-  //   LTdep[i]*=0.95;
-  //   }
-
   }
+  
+else {
+  for(i=0;i<total;i++)
+    {
+    v[i]+=0.5*((0.04*v[i]+5)*v[i]+140-u[i]+inputs[i]);//Izkevich formulae
+    v[i]+=0.5*((0.04*v[i]+5)*v[i]+140-u[i]+inputs[i]);//Repeat
+    u[i]+=a[i]*(0.2*v[i]-u[i]);
+    LTpot[i][t+delay+1]=0.95*LTpot[i][t+delay];
+    LTdep[i]*=0.95;
+    }
+  }
+}
 
 printf("Time at %d firing Rate = %.5f\n",sec,(float)(num_fired)/total);
 
-cudaMemcpy(dev_LTP, LTpot, sizeof(float)*total*(1001+delay), cudaMemcpyHostToDevice);
-updatePotentiation<<<totBlocks128,threadsPerBlock>>>(total, delay, dev_LTP);
-cudaMemcpy(LTpot, dev_LTP, sizeof(float)*total*(1001+delay), cudaMemcpyDeviceToHost);
+if (toggleUpdatePotentiation==1) {
+  cudaMemcpy(dev_LTP, LTpot, sizeof(float)*total*(1001+delay), cudaMemcpyHostToDevice);
+  updatePotentiation<<<totBlocks128,threadsPerBlock>>>(total, delay, dev_LTP);
+  cudaMemcpy(LTpot, dev_LTP, sizeof(float)*total*(1001+delay), cudaMemcpyDeviceToHost);
+}
 
 //Next second
-// for(i=0;i<total;i++)
-// for(j=0;j<delay+1;j++)
-//   LTpot[i][j]=LTpot[i][1000+j];
+else {
+  for(i=0;i<total;i++)
+  for(j=0;j<delay+1;j++)
+  LTpot[i][j]=LTpot[i][1000+j];
+}
 
 k=num_fired-1;
 while(1000-spike[k][0]<delay)k--;
+if (toggleUpdateSpike==1){
+cudaMemcpy(dev_spike, spike, sizeof(float)*hz*2, cudaMemcpyHostToDevice);
+updateSpike<<<(num_fired+128-1)/128, threadsPerBlock>>>(num_fired,k,dev_spike);
+cudaMemcpy(spike, dev_spike, sizeof(float)*hz*2, cudaMemcpyDeviceToHost);
+}
 
-for(i=1;i<num_fired-k;i++)
-  {
-  spike[i][0]=spike[k+i][0]-1000;
-  spike[i][1]=spike[k+i][1];
-  }
-// YOU ARE HERE AT UPDATE SPIKE
-// THEN UPDATE EXCITATORY CONNECTIONS
-  
+else {
+  for(i=1;i<num_fired-k;i++)
+    {
+    spike[i][0]=spike[k+i][0]-1000;
+    spike[i][1]=spike[k+i][1];
+    }
+}
+
 num_fired=num_fired-k;
 
-for(i=0;i<excitatory;i++)	//Update excitatory connections
-for(j=0;j<synapses;j++)
-  {
-  weights[i][j]+=0.01+w_derivs[i][j];
-  w_derivs[i][j]*=0.9;
-  if(weights[i][j]>max_weight) weights[i][j]=max_weight;
-  if(weights[i][j]<0) weights[i][j]=0.0;
-  }
+if (toggleUpdateExcitatory==1) {
+  cudaMemcpy(dev_weights, weights, sizeof(float)*total*synapses, cudaMemcpyHostToDevice);
+  cudaMemcpy(dev_w_derivs, w_derivs, sizeof(float)*total*synapses, cudaMemcpyHostToDevice);
+  updateExcitatory<<<excBlocks128,threadsPerBlock>>>(excitatory, synapses, total, max_weight, dev_weights, dev_w_derivs);
+  cudaMemcpy(w_derivs, dev_w_derivs, sizeof(float)*total*synapses, cudaMemcpyDeviceToHost);
+  cudaMemcpy(weights, dev_weights, sizeof(float)*total*synapses, cudaMemcpyDeviceToHost);
+}
+else {
+  for(i=0;i<excitatory;i++)	//Update excitatory connections
+  for(j=0;j<synapses;j++)
+    {
+    weights[i][j]+=0.01+w_derivs[i][j];
+    w_derivs[i][j]*=0.9;
+    if(weights[i][j]>max_weight) weights[i][j]=max_weight;
+    if(weights[i][j]<0) weights[i][j]=0.0;
+    }
+}
+
 
 }
 fclose(fs2D);
 fclose(fs);
+
+cudaFree(dev_a);
+cudaFree(dev_u);
+cudaFree(dev_v);
+cudaFree(dev_LTD);
+cudaFree(dev_LTP);
+cudaFree(dev_inputs);
+cudaFree(dev_weights);
+cudaFree(dev_w_derivs);
+cudaFree(dev_spike);
+cudaFree(dev_inputs);
+
 return 1;
 }
