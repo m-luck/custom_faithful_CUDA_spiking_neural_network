@@ -176,14 +176,14 @@ int *dev_num_fired;
 int *dev_spike;
 
 // CUDA function buttons:
-  int toggleInitAs = 0;
-  int toggleInitSynaptic = 0;
-  int toggleInitLT = 0;
-  int toggleUpdateVoltages = 0;
-  int toggleUpdatePotentiation = 0;
-  int toggleUpdateSpike = 0;
-  int toggleUpdateExcitatory = 0;
-  int toggleWarmup = 0;
+  int toggleInitAs;
+  int toggleInitSynaptic;
+  int toggleInitLT;
+  int toggleUpdateVoltages;
+  int toggleUpdatePotentiation;
+  int toggleUpdateSpike;
+  int toggleUpdateExcitatory;
+  int toggleWarmup;
 
 
 int pstochastic(int n) { // Pseudo-stochastic/random
@@ -403,7 +403,7 @@ initialize(toggleInitAs,toggleInitSynaptic,toggleInitLT,toggleWarmup);
 fs=fopen("trace.out","w");
 fs2D=fopen("slice_2D_trace.out","w");
 
-for(sec=0;sec<10;sec++) {//plot for 3s)
+for(sec=0;sec<60;sec++) {//plot for 1s)
 for(t=0;t<1000;t++)//plot for 1sec(1000ms)
   {
   for(i=0;i<total;i++)inputs[i]=0.0;//Fresh input
@@ -418,7 +418,8 @@ for(t=0;t<1000;t++)//plot for 1sec(1000ms)
       LTdep[i]=0.12;//Update depression
 
       for(j=0;j<pre_neuron[i];j++)
-        *pre_w_derivs[i][j]+=(1/axonal_dist[i][j])* // Adjusted arbitrary voltage loss through travel. CUDA note: The pointer in this logic makes it circuitous to parallelize.
+        *pre_w_derivs[i][j]+=
+                              // (1/axonal_dist[i][j])* // Adjusted arbitrary voltage loss through travel. CUDA note: The pointer in this logic makes it circuitous to parallelize.
                               LTpot[pre_input[i][j]][t+
                               delay-pre_delay[i][j]-1];//Spike after presynaptic spike
 
@@ -429,7 +430,7 @@ for(t=0;t<1000;t++)//plot for 1sec(1000ms)
       if(num_fired==hz){ printf("Overloaded spikes at t=%d", t); num_fired=1; }
       }
 
-      fprintf(fs,"%d\n",num_fired);
+      if (t%5 == 0) fprintf(fs,"%d\n",num_fired);
 
   k=num_fired;
   while(t-spike[--k][0]<delay)

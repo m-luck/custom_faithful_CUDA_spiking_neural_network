@@ -173,6 +173,7 @@ int i,j,k;//Loop counters
 int sec,t;//seconds, milliseconds
 float	inputs[total];//Inputs to neurons!
 FILE	*fs;//File pointer
+fs=fopen("spikes.dat","w");
 
 initialize();
 
@@ -181,10 +182,11 @@ for(t=0;t<1000;t++)//plot for 1sec(1000ms)
   {
   for(i=0;i<total;i++)inputs[i]=0.0;//Fresh input
   for(k=0;k<total/1000;k++) inputs[pstochastic(total)]=20.0;//Noisy input
-
+  int fired_count = 0;
   for(i=0;i<total;i++)
     if(v[i]>=30)//Passing the threshold:
       {
+        fired_count += 1;
       v[i]=-65.0;//Zero the voltage
       u[i]+=d[i];//Refractory period
       LTpot[i][t+delay]=0.1;// Update potentiation
@@ -217,15 +219,11 @@ for(t=0;t<1000;t++)//plot for 1sec(1000ms)
     LTpot[i][t+delay+1]=0.95*LTpot[i][t+delay];
     LTdep[i]*=0.95;
     }
+    if (t%50==0) fprintf(fs,"%d\n", fired_count);
+
   }
 
 std::cout<<"sec="<<sec<<",firingrate="<<float(num_fired)/total<<"\n";
-fs=fopen("spikes.dat","w");
-for(i=1;i<num_fired;i++)
-if(spike[i][0]>=0)
-  fprintf(fs,"%d%d\n",spike[i][0],spike[i][1]);
-fclose(fs);
-
 //Next second
 for(i=0;i<total;i++)
 for(j=0;j<delay+1;j++)
@@ -251,5 +249,6 @@ for(j=0;j<synapses;j++)
   }
 
 }
+fclose(fs);
 return 1;
 }
